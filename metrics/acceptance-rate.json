@@ -1,4 +1,15 @@
 {
   "schema_version": 3,
-  "records": []
+  "records": [
+    {
+      "pr_number": 2,
+      "title": "Implement issue #1: experiment storage and dashboard",
+      "category": "architecture",
+      "rejection_reasons": [],
+      "remediation_reasons": [],
+      "merged": true,
+      "closed_at": "2026-09-18T19:33:26Z",
+      "head_sha": "c40ee628acf474eeec18dc81e3d54b391d48ae4d"
+    }
+  ]
 }
