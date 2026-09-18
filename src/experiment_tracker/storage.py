@@ -17,6 +17,13 @@ CREATE TABLE IF NOT EXISTS experiments (
 """
 
 
+def _normalize_required_value(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    return normalized
+
+
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
@@ -42,14 +49,12 @@ def create_experiment(
     success_criteria: str,
 ) -> int:
     values = {
-        "title": title.strip(),
-        "category": category.strip(),
-        "hypothesis": hypothesis.strip(),
-        "baseline": baseline.strip(),
-        "success_criteria": success_criteria.strip(),
+        "title": _normalize_required_value(title, "title"),
+        "category": _normalize_required_value(category, "category"),
+        "hypothesis": _normalize_required_value(hypothesis, "hypothesis"),
+        "baseline": _normalize_required_value(baseline, "baseline"),
+        "success_criteria": _normalize_required_value(success_criteria, "success_criteria"),
     }
-    if any(not value for value in values.values()):
-        raise ValueError("experiment fields must not be empty")
     init_db(path)
     with sqlite3.connect(path) as connection:
         cursor = connection.execute(
