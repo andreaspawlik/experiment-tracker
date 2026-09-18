@@ -1,0 +1,43 @@
+name: Level 5 coordinator continuation
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  advance:
+    if: github.event.issue.pull_request == null && startsWith(github.event.comment.body, '/coordinator ') && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Parse transition command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          printf '%s' "$COMMENT_BODY" > /tmp/comment.txt
+          python scripts/coordinator.py parse-comment /tmp/comment.txt > /tmp/command.json
+          cat /tmp/command.json
+
+      - name: Load and advance state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue view "${{ github.event.issue.number }}" --json comments > /tmp/comments.json
+          run_id="$(python -c 'import json; print(json.load(open("/tmp/command.json"))["run_id"])')"
+          event="$(python -c 'import json; print(json.load(open("/tmp/command.json"))["event"])')"
+          details="$(python -c 'import json; print(json.dumps(json.load(open("/tmp/command.json"))["details"]))')"
+          python scripts/coordinator.py advance-comment /tmp/comments.json "$run_id" "$event" "$details" > /tmp/new-state.json
+          cat /tmp/new-state.json
+          state_comment="$(python -c 'from pathlib import Path; from scripts.coordinator import render_state_comment; import json; print(render_state_comment(json.loads(Path("/tmp/new-state.json").read_text())))')"
+          gh issue comment "${{ github.event.issue.number }}" --body "$state_comment\n\nCoordinator transition: $event. Next action: $(python -c 'import json; print(json.load(open("/tmp/new-state.json"))["next_action"])')."

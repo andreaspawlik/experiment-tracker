@@ -1,0 +1,25 @@
+{
+  "project": {
+    "name": "experiment-tracker",
+    "language": "python",
+    "install_command": "pip install -e \".[dev]\"",
+    "test_command": "pytest -q",
+    "coverage_command": "pytest --cov=experiment_tracker --cov-report=term-missing --cov-report=xml -q",
+    "coverage_threshold": 90
+  },
+  "backlog": {
+    "label": "work-item",
+    "project_name": "Experiment Tracker Backlog"
+  },
+  "github": {
+    "project_owner": "andreaspawlik",
+    "project_number": 3,
+    "project_id": "PVT_kwHOAGflZs4Bj4dn",
+    "status_field_id": "PVTSSF_lAHOAGflZs4Bj4dnzhirLEc",
+    "status_options": {
+      "todo": "f75ad846",
+      "in_progress": "47fc9ee4",
+      "done": "98236657"
+    }
+  }
+}

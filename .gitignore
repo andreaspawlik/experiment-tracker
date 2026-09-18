@@ -1,0 +1,6 @@
+*.py[cod]
+__pycache__/
+.coverage
+coverage.xml
+*.egg-info/
+data/

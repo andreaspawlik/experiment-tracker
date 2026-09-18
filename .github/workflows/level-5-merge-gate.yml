@@ -1,0 +1,47 @@
+name: Level 5 merge gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  issues: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Evaluate coordinator state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr_number="$PR_NUMBER_INPUT"
+          if [ -z "$pr_number" ] && [ -n "$WORKFLOW_SHA" ]; then
+            pr_number="$(gh pr list --state all --limit 100 --json number,headRefOid --jq '.' | python -c 'import json, os, sys; from scripts.coordinator import find_pr_by_sha; pr=find_pr_by_sha(json.load(sys.stdin), os.environ["WORKFLOW_SHA"]); print(pr["number"] if pr else "")')"
+          fi
+          test -n "$pr_number" || { echo "No PR associated with event; gate skipped."; exit 0; }
+          issue_number="$(gh pr view "$pr_number" --json body --jq .body | python -c 'import sys; from scripts.coordinator import linked_issue_number; print(linked_issue_number(sys.stdin.read()) or "")')"
+          test -n "$issue_number" || { echo "PR has no linked issue; gate skipped."; exit 0; }
+          gh issue view "$issue_number" --json comments > /tmp/comments.json
+          state="$(python scripts/coordinator.py latest-state /tmp/comments.json "$issue_number")"
+          test "$state" != "null" || { echo "No coordinator state; gate skipped."; exit 0; }
+          printf '%s' "$state" > /tmp/state.json
+          python scripts/merge_gate.py /tmp/state.json "$pr_number"

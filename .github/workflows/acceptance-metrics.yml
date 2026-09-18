@@ -1,0 +1,61 @@
+name: Acceptance metrics
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: acceptance-metrics-main
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record pull request outcome
+        run: python scripts/record_pr_outcome.py "$GITHUB_EVENT_PATH" metrics/acceptance-rate.json
+
+      - name: Print acceptance rate
+        run: python scripts/report_acceptance_rate.py metrics/acceptance-rate.json
+
+      - name: Print engineering feedback
+        run: python scripts/report_engineering_feedback.py metrics/acceptance-rate.json metrics/experiments.json
+
+      - name: Commit acceptance metrics
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metrics/acceptance-rate.json
+          git diff --cached --quiet || git commit -m "Record PR acceptance outcome"
+          git push origin HEAD:main
+
+      - name: Mark merged issue done
+        if: github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN" || { echo "PROJECT_TOKEN is not configured; leaving Project status unchanged"; exit 0; }
+          project_id="$(python scripts/project_config.py get github.project_id)"
+          status_field_id="$(python scripts/project_config.py get github.status_field_id)"
+          done_option="$(python scripts/project_config.py get github.status_options.done)"
+          issue_number="$(gh pr view "${{ github.event.pull_request.number }}" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number')"
+          test -n "$issue_number" || exit 0
+          project_owner="$(python scripts/project_config.py get github.project_owner)"
+          backlog_name="$(python scripts/project_config.py get backlog.project_name)"
+          project_items="$(gh api graphql -f query='query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){items(first:100){nodes{id content{... on Issue{number}}}}}}}' -f login="$project_owner" -F number="$(python scripts/project_config.py get github.project_number)")"
+          item_id="$(ISSUE_NUMBER="$issue_number" python -c 'import json, os, sys; nodes=json.load(sys.stdin)["data"]["user"]["projectV2"]["items"]["nodes"]; print(next((node["id"] for node in nodes if node.get("content", {}).get("number") == int(os.environ["ISSUE_NUMBER"])), ""))' <<< "$project_items")"
+          test -n "$item_id" || { echo "Issue #$issue_number is not in $backlog_name" >&2; exit 1; }
+          gh api graphql -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!){updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:{singleSelectOptionId:$optionId}}){projectV2Item{id}}}' -f projectId="$project_id" -f itemId="$item_id" -f fieldId="$status_field_id" -f optionId="$done_option" >/dev/null

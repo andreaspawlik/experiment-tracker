@@ -1,0 +1,27 @@
+[project]
+name = "experiment-tracker"
+version = "0.1.0"
+description = "A small Streamlit experiment tracker for agentic engineering feedback."
+requires-python = ">=3.9"
+dependencies = ["streamlit"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+
+[tool.coverage.run]
+source = ["experiment_tracker"]
+
+[tool.coverage.report]
+omit = ["src/experiment_tracker/app.py"]
+fail_under = 90
+show_missing = true
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

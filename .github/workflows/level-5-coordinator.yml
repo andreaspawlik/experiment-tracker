@@ -1,0 +1,84 @@
+name: Level 5 coordinator
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Optional issue number; blank selects the lowest eligible issue"
+        required: false
+        type: string
+      max_repair_iterations:
+        description: "Maximum Developer repair iterations before human escalation"
+        required: false
+        default: "2"
+        type: string
+      run_id:
+        description: "Optional stable run ID for resuming a coordinator run"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Select eligible issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue list --state open --limit 100 --json number,title,state,labels,body > /tmp/issues.json
+          selected="$(python scripts/coordinator.py select /tmp/issues.json "${{ inputs.issue_number }}")"
+          test "$selected" != "null"
+          selected_number="$(python -c 'import json, sys; print(json.load(sys.stdin)["number"])' <<< "$selected")"
+          echo "issue_number=$selected_number" >> "$GITHUB_OUTPUT"
+          echo "$selected"
+        id: selection
+
+      - name: Create coordinator state
+        run: |
+          issue_number="${{ steps.selection.outputs.issue_number }}"
+          python scripts/coordinator.py start "$issue_number" "${{ inputs.max_repair_iterations }}" "${{ inputs.run_id }}" > automation-state.json
+          cat automation-state.json
+
+      - name: Update Project status
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          issue_number="${{ steps.selection.outputs.issue_number }}"
+          project_id="$(python scripts/project_config.py get github.project_id)"
+          status_field_id="$(python scripts/project_config.py get github.status_field_id)"
+          in_progress_option="$(python scripts/project_config.py get github.status_options.in_progress)"
+          test -n "$GH_TOKEN" || { echo "PROJECT_TOKEN secret is required to update configured Project status" >&2; exit 1; }
+          project_owner="$(python scripts/project_config.py get github.project_owner)"
+          backlog_name="$(python scripts/project_config.py get backlog.project_name)"
+          project_items="$(gh api graphql -f query='query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){items(first:100){nodes{id content{... on Issue{number}}}}}}}' -f login="$project_owner" -F number="$(python scripts/project_config.py get github.project_number)")"
+          item_id="$(ISSUE_NUMBER="$issue_number" python -c 'import json, os, sys; nodes=json.load(sys.stdin)["data"]["user"]["projectV2"]["items"]["nodes"]; print(next((node["id"] for node in nodes if node.get("content", {}).get("number") == int(os.environ["ISSUE_NUMBER"])), ""))' <<< "$project_items")"
+          test -n "$item_id" || { echo "Issue #$issue_number is not in $backlog_name" >&2; exit 1; }
+          gh api graphql -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!){updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:{singleSelectOptionId:$optionId}}){projectV2Item{id}}}' -f projectId="$project_id" -f itemId="$item_id" -f fieldId="$status_field_id" -f optionId="$in_progress_option" >/dev/null
+
+      - name: Hand off to Architect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue_number="${{ steps.selection.outputs.issue_number }}"
+          run_id="$(python -c 'import json; print(json.load(open("automation-state.json"))["run_id"])')"
+          state_comment="$(python -c 'import json; from scripts.coordinator import render_state_comment; print(render_state_comment(json.load(open("automation-state.json"))))')"
+          gh issue comment "$issue_number" --body "$state_comment\n\nCoordinator started. Run ID: $run_id. Architect must validate scope, dependencies, acceptance criteria, category, and edge cases before Developer implementation. Use `/coordinator $run_id architect_validated` after validation."
+
+      - name: Upload coordinator state
+        uses: actions/upload-artifact@v4
+        with:
+          name: coordinator-state
+          path: automation-state.json

@@ -1,0 +1,72 @@
+name: Level 5 PR and CI reconciliation
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  reconcile-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Reconcile Developer handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue_number="$(gh pr view "${{ github.event.pull_request.number }}" --json body --jq .body | python -c 'import sys; from scripts.coordinator import linked_issue_number; print(linked_issue_number(sys.stdin.read()) or "")')"
+          test -n "$issue_number" || exit 0
+          gh issue view "$issue_number" --json comments > /tmp/comments.json
+          state="$(python scripts/coordinator.py find-state /tmp/comments.json "$issue_number" developer)"
+          test "$state" != "null" || exit 0
+          run_id="$(python -c 'import json, sys; print(json.load(sys.stdin)["run_id"])' <<< "$state")"
+          new_state="$(python scripts/coordinator.py advance-comment /tmp/comments.json "$run_id" developer_pr_created '{"pr_number":${{ github.event.pull_request.number }}}')"
+          state_comment="$(python -c 'from scripts.coordinator import render_state_comment; import json, sys; print(render_state_comment(json.load(sys.stdin)))' <<< "$new_state")"
+          gh issue comment "$issue_number" --body "$state_comment
+
+          Automatic transition: developer_pr_created for PR #${{ github.event.pull_request.number }}."
+
+  reconcile-ci:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'CI' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Reconcile CI handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number="$(gh pr list --state all --limit 100 --json number,headRefOid --jq '.' | python -c 'import json, sys; from scripts.coordinator import find_pr_by_sha; pull_requests=json.load(sys.stdin); pull_request=find_pr_by_sha(pull_requests, "${{ github.event.workflow_run.head_sha }}"); print(pull_request["number"] if pull_request else "")')"
+          test -n "$pr_number" || exit 0
+          issue_number="$(gh pr view "$pr_number" --json body --jq .body | python -c 'import sys; from scripts.coordinator import linked_issue_number; print(linked_issue_number(sys.stdin.read()) or "")')"
+          test -n "$issue_number" || exit 0
+          gh issue view "$issue_number" --json comments > /tmp/comments.json
+          state="$(python scripts/coordinator.py find-state /tmp/comments.json "$issue_number" ci)"
+          test "$state" != "null" || exit 0
+          run_id="$(python -c 'import json, sys; print(json.load(sys.stdin)["run_id"])' <<< "$state")"
+          new_state="$(python scripts/coordinator.py advance-comment /tmp/comments.json "$run_id" ci_passed)"
+          state_comment="$(python -c 'from scripts.coordinator import render_state_comment; import json, sys; print(render_state_comment(json.load(sys.stdin)))' <<< "$new_state")"
+          gh issue comment "$issue_number" --body "$state_comment
+
+          Automatic transition: ci_passed for PR #$pr_number."
