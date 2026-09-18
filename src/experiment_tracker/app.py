@@ -16,7 +16,12 @@ def render_dashboard() -> None:
     if not experiments:
         st.info("No experiments yet. Create the first one below.")
     else:
-        st.dataframe(experiments, use_container_width=True, hide_index=True)
+        visible_columns = ["title", "status", "category", "baseline", "success_criteria"]
+        st.dataframe(
+            [{key: row[key] for key in visible_columns} for row in experiments],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     with st.expander("Create experiment", expanded=not experiments):
         with st.form("create_experiment"):
